@@ -1,0 +1,66 @@
+# yaml-language-server: $schema=https://golangci-lint.run/jsonschema/golangci.jsonschema.json
+
+version: "2"
+
+run:
+  go: "1.25"
+  timeout: 5m
+  allow-parallel-runners: true
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+    # Additional linters
+    - bodyclose
+    - containedctx
+    - contextcheck
+    - durationcheck
+    - gocritic
+    - gosec
+    - misspell
+    - modernize
+    - nilerr
+    - noctx
+    - revive
+    - rowserrcheck
+    - sqlclosecheck
+    - unconvert
+    - unparam
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+          - errcheck
+          - noctx
+          - containedctx
+          - contextcheck
+
+  settings:
+    gosec:
+      severity: medium
+      excludes:
+        - G114 # errcheck handles unchecked errors already
+        - G115 # Inputs are pre-validated before conversion; unnecessary/noisy for us
+        - G602 # noisy on fmt.Sprintf with dynamic format
+
+    revive:
+      rules:
+        - name: early-return
+        - name: var-naming
+
+    gocritic:
+      enabled-checks:
+        - rangeValCopy
+
+issues:
+  max-issues-per-linter: 0 # unlimited
+  max-same-issues: 0 # unlimited
+  new: false # report all issues, not just new ones
