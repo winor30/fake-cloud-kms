@@ -1,0 +1,7 @@
+.git
+.serena
+.claude
+node_modules
+**/node_modules
+clients/typescript/dist
+bin
