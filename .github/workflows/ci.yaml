@@ -11,9 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.25.x"
           cache: true
@@ -24,9 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.25.x"
           cache: true
@@ -37,9 +37,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.25.x"
           cache: true
@@ -50,9 +50,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.25.x"
           cache: true
@@ -63,14 +63,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.x"
+          cache: true
+      - name: test
+        run: make test
+
+  coverage:
+    runs-on: ubuntu-latest
+    needs:
+      - test
+    steps:
+      - name: Checkout
         uses: actions/checkout@v5
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: "1.25.x"
           cache: true
-      - name: test
-        run: make test
+      - name: Run coverage
+        run: make coverage
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.out
+          flags: go
+          fail_ci_if_error: true
 
   clients-go:
     runs-on: ubuntu-latest
@@ -78,9 +99,9 @@ jobs:
       - build
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.25.x"
           cache: true
@@ -93,7 +114,7 @@ jobs:
       - build
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
