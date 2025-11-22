@@ -27,12 +27,12 @@ go run ./cmd/fake-cloud-kms \
 ## In-Process Usage (Go)
 ```go
 ctx := context.Background()
-inst, err := emulator.Start(ctx, emulator.Options{})
+server, err := emulator.Start(ctx, emulator.Options{})
 if err != nil {
 	log.Fatal(err)
 }
-defer inst.Stop(ctx)
-fmt.Println("addr:", inst.Addr)
+defer server.Stop(ctx)
+fmt.Println("addr:", server.Addr)
 ```
 
 ## Seeding (YAML)
