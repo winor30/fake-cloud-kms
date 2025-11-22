@@ -7,9 +7,10 @@ import (
 	"sync"
 
 	"cloud.google.com/go/kms/apiv1/kmspb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	storeerrors "github.com/winor30/fake-cloud-kms/errors/store"
 	"github.com/winor30/fake-cloud-kms/kmscrypto"
 	"github.com/winor30/fake-cloud-kms/names"
 	"github.com/winor30/fake-cloud-kms/store"
@@ -61,7 +62,7 @@ func (s *Store) CreateKeyRing(_ context.Context, keyRing *kmspb.KeyRing) error {
 	defer s.mu.Unlock()
 
 	if _, ok := s.keyRings[keyRing.GetName()]; ok {
-		return storeerrors.ErrAlreadyExists
+		return status.Errorf(codes.AlreadyExists, "key ring %q already exists", keyRing.GetName())
 	}
 
 	s.keyRings[keyRing.GetName()] = &keyRingRecord{
@@ -77,7 +78,7 @@ func (s *Store) GetKeyRing(_ context.Context, name string) (*kmspb.KeyRing, erro
 	defer s.mu.RUnlock()
 	rec, ok := s.keyRings[name]
 	if !ok {
-		return nil, storeerrors.ErrNotFound
+		return nil, status.Errorf(codes.NotFound, "key ring %q not found", name)
 	}
 	return cloneKeyRing(rec.keyRing), nil
 }
@@ -105,11 +106,11 @@ func (s *Store) CreateCryptoKey(_ context.Context, keyRingName string, cryptoKey
 	defer s.mu.Unlock()
 	ring, ok := s.keyRings[keyRingName]
 	if !ok {
-		return storeerrors.ErrNotFound
+		return status.Errorf(codes.NotFound, "key ring %q not found", keyRingName)
 	}
 
 	if _, exists := ring.cryptoKeys[cryptoKey.GetName()]; exists {
-		return storeerrors.ErrAlreadyExists
+		return status.Errorf(codes.AlreadyExists, "crypto key %q already exists", cryptoKey.GetName())
 	}
 
 	versionRecord := &cryptoKeyVersionRecord{
@@ -146,7 +147,7 @@ func (s *Store) ListCryptoKeys(_ context.Context, parent string) ([]*kmspb.Crypt
 
 	ring, ok := s.keyRings[parent]
 	if !ok {
-		return nil, storeerrors.ErrNotFound
+		return nil, status.Errorf(codes.NotFound, "key ring %q not found", parent)
 	}
 
 	keyNames := slices.Sorted(maps.Keys(ring.cryptoKeys))
@@ -168,7 +169,7 @@ func (s *Store) CreateCryptoKeyVersion(_ context.Context, cryptoKeyName string, 
 	}
 
 	if _, exists := keyLookup.key.versions[version.GetName()]; exists {
-		return storeerrors.ErrAlreadyExists
+		return status.Errorf(codes.AlreadyExists, "crypto key version %q already exists", version.GetName())
 	}
 
 	keyLookup.key.versions[version.GetName()] = &cryptoKeyVersionRecord{
@@ -219,7 +220,7 @@ func (s *Store) SetPrimaryVersion(_ context.Context, cryptoKeyName, versionName 
 	}
 
 	if lookup.key.cryptoKey.GetName() != cryptoKeyName {
-		return nil, storeerrors.ErrNotFound
+		return nil, status.Errorf(codes.NotFound, "crypto key %q not found for version %q", cryptoKeyName, versionName)
 	}
 
 	lookup.key.cryptoKey.Primary = cloneCryptoKeyVersion(lookup.version.version)
@@ -243,7 +244,7 @@ func (s *Store) findCryptoKey(name string) (*keyLookup, error) {
 			return &keyLookup{ring: ring, key: rec}, nil
 		}
 	}
-	return nil, storeerrors.ErrNotFound
+	return nil, status.Errorf(codes.NotFound, "crypto key %q not found", name)
 }
 
 func (s *Store) findVersion(name string) (*versionLookup, error) {
@@ -254,5 +255,5 @@ func (s *Store) findVersion(name string) (*versionLookup, error) {
 			}
 		}
 	}
-	return nil, storeerrors.ErrNotFound
+	return nil, status.Errorf(codes.NotFound, "crypto key version %q not found", name)
 }
