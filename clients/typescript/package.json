@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "build": "tsc --project tsconfig.json",
-    "start": "npm run build && node dist/index.js"
+    "start": "pnpm run build && node dist/index.js"
   },
   "dependencies": {
     "@google-cloud/kms": "^4.5.0",

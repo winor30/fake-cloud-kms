@@ -9,8 +9,8 @@ This directory contains a minimal TypeScript program that exercises the fake Clo
 ## Running locally
 ```bash
 cd clients/typescript
-npm install
-npm start
+pnpm install
+pnpm start
 ```
 
 Optional environment variables:
