@@ -6,7 +6,7 @@ import (
 	"github.com/winor30/fake-cloud-kms/names"
 )
 
-func TestParseAndFormat(t *testing.T) {
+func TestParseAndFormatResources(t *testing.T) {
 	loc, err := names.ParseLocation("projects/demo/locations/global")
 	if err != nil {
 		t.Fatalf("parse location: %v", err)
@@ -78,5 +78,13 @@ func TestParseRejectsInvalidIDs(t *testing.T) {
 				t.Fatalf("expected error")
 			}
 		})
+	}
+}
+
+func TestFormatCryptoKeyVersion(t *testing.T) {
+	t.Parallel()
+	parent := "projects/demo/locations/global/keyRings/app/cryptoKeys/pair"
+	if got := names.FormatCryptoKeyVersion(parent, "5"); got != parent+"/cryptoKeyVersions/5" {
+		t.Fatalf("formatted version mismatch: %s", got)
 	}
 }
