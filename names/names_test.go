@@ -39,3 +39,45 @@ func TestParseAndFormat(t *testing.T) {
 		t.Fatalf("version resource mismatch: %s", got)
 	}
 }
+
+func TestParseRejectsInvalidIDs(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		call func() error
+	}{
+		{
+			name: "invalid project",
+			call: func() error { _, err := names.ParseLocation("projects/!/locations/global"); return err },
+		},
+		{
+			name: "invalid key ring",
+			call: func() error {
+				_, err := names.ParseKeyRing("projects/demo/locations/global/keyRings/invalid id")
+				return err
+			},
+		},
+		{
+			name: "invalid crypto key",
+			call: func() error {
+				_, err := names.ParseCryptoKey("projects/demo/locations/global/keyRings/app/cryptoKeys/")
+				return err
+			},
+		},
+		{
+			name: "invalid version",
+			call: func() error {
+				_, err := names.ParseCryptoKeyVersion("projects/demo/locations/global/keyRings/app/cryptoKeys/pair/cryptoKeyVersions/v1")
+				return err
+			},
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if err := tc.call(); err == nil {
+				t.Fatalf("expected error")
+			}
+		})
+	}
+}
