@@ -23,10 +23,11 @@ type ServiceAPI interface {
 
 // Apply loads the provided YAML document and provisions resources.
 func Apply(ctx context.Context, svc ServiceAPI, path string) error {
-	if err := ensureYAML(path); err != nil {
+	cleanPath := filepath.Clean(path)
+	if err := ensureYAML(cleanPath); err != nil {
 		return err
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(cleanPath) // path is sanitized above
 	if err != nil {
 		return fmt.Errorf("read seed file: %w", err)
 	}

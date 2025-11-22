@@ -72,7 +72,8 @@ func Start(ctx context.Context, opts Options) (*Instance, error) {
 		}
 	}
 
-	lis, err := net.Listen("tcp", opts.ListenAddr)
+	var lc net.ListenConfig
+	lis, err := lc.Listen(ctx, "tcp", opts.ListenAddr)
 	if err != nil {
 		return nil, fmt.Errorf("listen: %w", err)
 	}

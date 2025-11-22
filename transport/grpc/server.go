@@ -25,7 +25,8 @@ func New(svc service.KMSService, opts ...grpc.ServerOption) *Server {
 
 // ListenAndServe listens on addr and serves requests until the context is canceled.
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
-	lis, err := net.Listen("tcp", addr)
+	var lc net.ListenConfig
+	lis, err := lc.Listen(ctx, "tcp", addr)
 	if err != nil {
 		return err
 	}

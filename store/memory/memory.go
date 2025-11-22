@@ -115,7 +115,7 @@ func (s *Store) CreateCryptoKey(_ context.Context, keyRingName string, cryptoKey
 
 	versionRecord := &cryptoKeyVersionRecord{
 		version:     cloneCryptoKeyVersion(primaryVersion),
-		keyMaterial: kmscrypto.KeyMaterial(slices.Clone(keyMaterial)),
+		keyMaterial: slices.Clone(keyMaterial),
 	}
 
 	rec := &cryptoKeyRecord{
@@ -174,7 +174,7 @@ func (s *Store) CreateCryptoKeyVersion(_ context.Context, cryptoKeyName string, 
 
 	keyLookup.key.versions[version.GetName()] = &cryptoKeyVersionRecord{
 		version:     cloneCryptoKeyVersion(version),
-		keyMaterial: kmscrypto.KeyMaterial(slices.Clone(keyMaterial)),
+		keyMaterial: slices.Clone(keyMaterial),
 	}
 	return nil
 }
@@ -189,7 +189,7 @@ func (s *Store) GetCryptoKeyVersion(_ context.Context, name string) (*kmspb.Cryp
 		return nil, nil, err
 	}
 
-	return cloneCryptoKeyVersion(lookup.version.version), kmscrypto.KeyMaterial(slices.Clone(lookup.version.keyMaterial)), nil
+	return cloneCryptoKeyVersion(lookup.version.version), slices.Clone(lookup.version.keyMaterial), nil
 }
 
 // ListCryptoKeyVersions lists versions under parent.
