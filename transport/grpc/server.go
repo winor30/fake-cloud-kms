@@ -9,7 +9,6 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/winor30/fake-cloud-kms/service"
-	"github.com/winor30/fake-cloud-kms/transport/grpc/interceptor"
 )
 
 // Server wraps the gRPC server lifecycle for the KMS emulator.
@@ -19,7 +18,6 @@ type Server struct {
 
 // New creates a gRPC server that exposes the provided KMS service.
 func New(svc service.KMSService, opts ...grpc.ServerOption) *Server {
-	opts = append(opts, grpc.ChainUnaryInterceptor(interceptor.ErrorInterceptor()))
 	grpcServer := grpc.NewServer(opts...)
 	kmspb.RegisterKeyManagementServiceServer(grpcServer, newHandler(svc))
 	return &Server{grpcServer: grpcServer}
