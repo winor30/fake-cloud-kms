@@ -27,7 +27,7 @@ func Apply(ctx context.Context, svc ServiceAPI, path string) error {
 	if err := ensureYAML(cleanPath); err != nil {
 		return err
 	}
-	data, err := os.ReadFile(cleanPath) // path is sanitized above
+	data, err := os.ReadFile(cleanPath)
 	if err != nil {
 		return fmt.Errorf("read seed file: %w", err)
 	}
@@ -71,17 +71,21 @@ func createKeyRing(ctx context.Context, svc ServiceAPI, parent, id string) error
 }
 
 func createCryptoKey(ctx context.Context, svc ServiceAPI, keyRingName, id string, seed CryptoKeySeed) error {
-	purpose := kmspb.CryptoKey_ENCRYPT_DECRYPT
-	if seed.Purpose != "" && seed.Purpose != "ENCRYPT_DECRYPT" {
-		return fmt.Errorf("unsupported purpose in seed for %s/%s: %s", keyRingName, id, seed.Purpose)
+	purpose, versionTemplate, err := resolvePurpose(seed)
+	if err != nil {
+		return fmt.Errorf("seed for %s/%s: %w", keyRingName, id, err)
 	}
-	_, err := svc.CreateCryptoKey(ctx, &kmspb.CreateCryptoKeyRequest{
+	ck := &kmspb.CryptoKey{
+		Purpose: purpose,
+		Labels:  seed.Labels,
+	}
+	if versionTemplate != nil {
+		ck.VersionTemplate = versionTemplate
+	}
+	_, err = svc.CreateCryptoKey(ctx, &kmspb.CreateCryptoKeyRequest{
 		Parent:      keyRingName,
 		CryptoKeyId: id,
-		CryptoKey: &kmspb.CryptoKey{
-			Purpose: purpose,
-			Labels:  seed.Labels,
-		},
+		CryptoKey:   ck,
 	})
 	if err != nil && status.Code(err) != codes.AlreadyExists {
 		return fmt.Errorf("create crypto key %s/%s: %w", keyRingName, id, err)
@@ -121,9 +125,29 @@ type keyRing struct {
 
 // CryptoKeySeed defines the subset of fields supported in seed files.
 type CryptoKeySeed struct {
-	Purpose  string            `yaml:"purpose"`
-	Labels   map[string]string `yaml:"labels"`
-	Versions []versionSeed     `yaml:"versions"`
+	Purpose   string            `yaml:"purpose"`
+	Algorithm string            `yaml:"algorithm"`
+	Labels    map[string]string `yaml:"labels"`
+	Versions  []versionSeed     `yaml:"versions"`
+}
+
+var algorithmMap = map[string]kmspb.CryptoKeyVersion_CryptoKeyVersionAlgorithm{
+	"EC_SIGN_SECP256K1_SHA256": kmspb.CryptoKeyVersion_EC_SIGN_SECP256K1_SHA256,
+}
+
+func resolvePurpose(seed CryptoKeySeed) (kmspb.CryptoKey_CryptoKeyPurpose, *kmspb.CryptoKeyVersionTemplate, error) {
+	switch seed.Purpose {
+	case "", "ENCRYPT_DECRYPT":
+		return kmspb.CryptoKey_ENCRYPT_DECRYPT, nil, nil
+	case "ASYMMETRIC_SIGN":
+		alg, ok := algorithmMap[seed.Algorithm]
+		if !ok {
+			return 0, nil, fmt.Errorf("unsupported algorithm %q for ASYMMETRIC_SIGN", seed.Algorithm)
+		}
+		return kmspb.CryptoKey_ASYMMETRIC_SIGN, &kmspb.CryptoKeyVersionTemplate{Algorithm: alg}, nil
+	default:
+		return 0, nil, fmt.Errorf("unsupported purpose %q", seed.Purpose)
+	}
 }
 
 type versionSeed struct {

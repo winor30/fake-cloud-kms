@@ -2,10 +2,16 @@ package service_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/sha256"
+	"encoding/asn1"
+	"encoding/pem"
+	"math/big"
 	"strings"
 	"testing"
 
 	"cloud.google.com/go/kms/apiv1/kmspb"
+	"github.com/btcsuite/btcd/btcec/v2"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -300,7 +306,20 @@ func TestCreateCryptoKeyValidations(t *testing.T) {
 			req: &kmspb.CreateCryptoKeyRequest{
 				Parent:      keyRing,
 				CryptoKeyId: "id",
-				CryptoKey:   &kmspb.CryptoKey{Purpose: kmspb.CryptoKey_ASYMMETRIC_SIGN},
+				CryptoKey:   &kmspb.CryptoKey{Purpose: kmspb.CryptoKey_ASYMMETRIC_DECRYPT},
+			},
+		},
+		{
+			name: "asymmetric sign with wrong algorithm",
+			req: &kmspb.CreateCryptoKeyRequest{
+				Parent:      keyRing,
+				CryptoKeyId: "id",
+				CryptoKey: &kmspb.CryptoKey{
+					Purpose: kmspb.CryptoKey_ASYMMETRIC_SIGN,
+					VersionTemplate: &kmspb.CryptoKeyVersionTemplate{
+						Algorithm: kmspb.CryptoKeyVersion_RSA_SIGN_PSS_2048_SHA256,
+					},
+				},
 			},
 		},
 	} {
@@ -363,6 +382,146 @@ func TestGetOperations(t *testing.T) {
 	}
 }
 
+func TestAsymmetricSignAndGetPublicKey(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, versionName := setupAsymmetricKey(t)
+
+	t.Run("get public key returns PEM with CRC32C", func(t *testing.T) {
+		pubResp, err := svc.GetPublicKey(ctx, &kmspb.GetPublicKeyRequest{Name: versionName})
+		if err != nil {
+			t.Fatalf("get public key: %v", err)
+		}
+		if pubResp.GetPem() == "" {
+			t.Fatal("PEM must not be empty")
+		}
+		if pubResp.GetAlgorithm() != kmspb.CryptoKeyVersion_EC_SIGN_SECP256K1_SHA256 {
+			t.Fatalf("algorithm = %v, want EC_SIGN_SECP256K1_SHA256", pubResp.GetAlgorithm())
+		}
+		if pubResp.GetName() != versionName {
+			t.Fatalf("name = %s, want %s", pubResp.GetName(), versionName)
+		}
+		// Verify CRC32C
+		expectedCRC := int64(crc.Compute([]byte(pubResp.GetPem())))
+		if pubResp.GetPemCrc32C().GetValue() != expectedCRC {
+			t.Fatalf("pem_crc32c mismatch: got %d, want %d", pubResp.GetPemCrc32C().GetValue(), expectedCRC)
+		}
+	})
+
+	t.Run("asymmetric sign returns DER signature with CRC32C", func(t *testing.T) {
+		digest := sha256.Sum256([]byte("test message"))
+		digestCRC := crc.Compute(digest[:])
+
+		signResp, err := svc.AsymmetricSign(ctx, &kmspb.AsymmetricSignRequest{
+			Name:         versionName,
+			Digest:       &kmspb.Digest{Digest: &kmspb.Digest_Sha256{Sha256: digest[:]}},
+			DigestCrc32C: wrapperspb.Int64(int64(digestCRC)),
+		})
+		if err != nil {
+			t.Fatalf("asymmetric sign: %v", err)
+		}
+		if len(signResp.GetSignature()) == 0 {
+			t.Fatal("signature must not be empty")
+		}
+		if !signResp.GetVerifiedDigestCrc32C() {
+			t.Fatal("verified_digest_crc32c should be true")
+		}
+		// Verify signature CRC32C
+		expectedCRC := int64(crc.Compute(signResp.GetSignature()))
+		if signResp.GetSignatureCrc32C().GetValue() != expectedCRC {
+			t.Fatalf("signature_crc32c mismatch: got %d, want %d", signResp.GetSignatureCrc32C().GetValue(), expectedCRC)
+		}
+
+		// Verify the signature with the public key
+		pubResp, err := svc.GetPublicKey(ctx, &kmspb.GetPublicKeyRequest{Name: versionName})
+		if err != nil {
+			t.Fatalf("get public key: %v", err)
+		}
+		pubKey := parseSecp256k1PEM(t, []byte(pubResp.GetPem()))
+		ecPub := pubKey.ToECDSA()
+
+		var sigDER struct{ R, S *big.Int }
+		if _, err := asn1.Unmarshal(signResp.GetSignature(), &sigDER); err != nil {
+			t.Fatalf("unmarshal DER: %v", err)
+		}
+		if !ecdsa.Verify(ecPub, digest[:], sigDER.R, sigDER.S) {
+			t.Fatal("signature verification failed")
+		}
+	})
+
+	t.Run("rejects missing digest", func(t *testing.T) {
+		_, err := svc.AsymmetricSign(ctx, &kmspb.AsymmetricSignRequest{
+			Name: versionName,
+		})
+		requireStatusCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("rejects non-sha256 digest", func(t *testing.T) {
+		_, err := svc.AsymmetricSign(ctx, &kmspb.AsymmetricSignRequest{
+			Name:   versionName,
+			Digest: &kmspb.Digest{Digest: &kmspb.Digest_Sha384{Sha384: make([]byte, 48)}},
+		})
+		requireStatusCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("rejects GetPublicKey on symmetric key", func(t *testing.T) {
+		symSvc, symKeyName := setupKey(t)
+		symVersionName := symKeyName + "/cryptoKeyVersions/1"
+		_, err := symSvc.GetPublicKey(ctx, &kmspb.GetPublicKeyRequest{Name: symVersionName})
+		requireStatusCode(t, err, codes.FailedPrecondition)
+	})
+}
+
+func TestCreateAsymmetricCryptoKey(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := newTestService()
+	keyRing := createKeyRing(t, svc, "projects/demo/locations/global", "asym")
+
+	ck, err := svc.CreateCryptoKey(ctx, &kmspb.CreateCryptoKeyRequest{
+		Parent:      keyRing,
+		CryptoKeyId: "signer",
+		CryptoKey: &kmspb.CryptoKey{
+			Purpose: kmspb.CryptoKey_ASYMMETRIC_SIGN,
+			VersionTemplate: &kmspb.CryptoKeyVersionTemplate{
+				Algorithm: kmspb.CryptoKeyVersion_EC_SIGN_SECP256K1_SHA256,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create asymmetric crypto key: %v", err)
+	}
+
+	if ck.GetPurpose() != kmspb.CryptoKey_ASYMMETRIC_SIGN {
+		t.Fatalf("purpose = %v, want ASYMMETRIC_SIGN", ck.GetPurpose())
+	}
+	if ck.GetVersionTemplate().GetAlgorithm() != kmspb.CryptoKeyVersion_EC_SIGN_SECP256K1_SHA256 {
+		t.Fatalf("algorithm = %v, want EC_SIGN_SECP256K1_SHA256", ck.GetVersionTemplate().GetAlgorithm())
+	}
+}
+
+func TestCreateAsymmetricCryptoKeyVersion(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, versionName := setupAsymmetricKey(t)
+
+	// versionName ends with /cryptoKeyVersions/1, get the crypto key name
+	cryptoKeyName := versionName[:strings.LastIndex(versionName, "/cryptoKeyVersions/")]
+
+	version, err := svc.CreateCryptoKeyVersion(ctx, &kmspb.CreateCryptoKeyVersionRequest{Parent: cryptoKeyName})
+	if err != nil {
+		t.Fatalf("create crypto key version: %v", err)
+	}
+	if version.GetAlgorithm() != kmspb.CryptoKeyVersion_EC_SIGN_SECP256K1_SHA256 {
+		t.Fatalf("new version algorithm = %v, want EC_SIGN_SECP256K1_SHA256", version.GetAlgorithm())
+	}
+	if !strings.HasSuffix(version.GetName(), "/cryptoKeyVersions/2") {
+		t.Fatalf("expected version 2, got %s", version.GetName())
+	}
+}
+
+// ---- helpers ----
+
 func mustEncrypt(t *testing.T, ctx context.Context, svc service.KMSService, req *kmspb.EncryptRequest) *kmspb.EncryptResponse {
 	t.Helper()
 	resp, err := svc.Encrypt(ctx, req)
@@ -396,6 +555,14 @@ func setupKey(t *testing.T) (service.KMSService, string) {
 	return svc, cryptoKey
 }
 
+func setupAsymmetricKey(t *testing.T) (service.KMSService, string) {
+	t.Helper()
+	svc := newTestService()
+	keyRing := createKeyRing(t, svc, "projects/demo/locations/global", "asym")
+	cryptoKeyName := createAsymmetricCryptoKey(t, svc, keyRing, "signer")
+	return svc, cryptoKeyName + "/cryptoKeyVersions/1"
+}
+
 func newTestService() service.KMSService {
 	return service.New(memory.New(), kmscrypto.NewTinkEngine())
 }
@@ -422,4 +589,45 @@ func createCryptoKey(t *testing.T, svc service.KMSService, keyRingName, id strin
 		t.Fatalf("create crypto key %s: %v", name, err)
 	}
 	return name
+}
+
+func createAsymmetricCryptoKey(t *testing.T, svc service.KMSService, keyRingName, id string) string {
+	t.Helper()
+	name := keyRingName + "/cryptoKeys/" + id
+	if _, err := svc.CreateCryptoKey(context.Background(), &kmspb.CreateCryptoKeyRequest{
+		Parent:      keyRingName,
+		CryptoKeyId: id,
+		CryptoKey: &kmspb.CryptoKey{
+			Purpose: kmspb.CryptoKey_ASYMMETRIC_SIGN,
+			VersionTemplate: &kmspb.CryptoKeyVersionTemplate{
+				Algorithm: kmspb.CryptoKeyVersion_EC_SIGN_SECP256K1_SHA256,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("create asymmetric crypto key %s: %v", name, err)
+	}
+	return name
+}
+
+func parseSecp256k1PEM(t *testing.T, pemBytes []byte) *btcec.PublicKey {
+	t.Helper()
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		t.Fatal("failed to decode PEM block")
+	}
+	var pkixKey struct {
+		Algorithm struct {
+			OID        asn1.ObjectIdentifier
+			Parameters asn1.ObjectIdentifier
+		}
+		PublicKey asn1.BitString
+	}
+	if _, err := asn1.Unmarshal(block.Bytes, &pkixKey); err != nil {
+		t.Fatalf("unmarshal PKIX: %v", err)
+	}
+	pubKey, err := btcec.ParsePubKey(pkixKey.PublicKey.Bytes)
+	if err != nil {
+		t.Fatalf("parse secp256k1 public key: %v", err)
+	}
+	return pubKey
 }
