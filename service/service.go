@@ -37,9 +37,11 @@ type KMSService interface {
 	UpdateCryptoKeyPrimaryVersion(ctx context.Context, req *kmspb.UpdateCryptoKeyPrimaryVersionRequest) (*kmspb.CryptoKey, error)
 	Encrypt(ctx context.Context, req *kmspb.EncryptRequest) (*kmspb.EncryptResponse, error)
 	Decrypt(ctx context.Context, req *kmspb.DecryptRequest) (*kmspb.DecryptResponse, error)
+
+	GetPublicKey(ctx context.Context, req *kmspb.GetPublicKeyRequest) (*kmspb.PublicKey, error)
+	AsymmetricSign(ctx context.Context, req *kmspb.AsymmetricSignRequest) (*kmspb.AsymmetricSignResponse, error)
 }
 
-// service implements the KMS operations against the provided store and crypto engine.
 type service struct {
 	store  store.Store
 	engine kmscrypto.Engine
@@ -47,7 +49,6 @@ type service struct {
 
 var _ KMSService = (*service)(nil)
 
-// New constructs a service.
 func New(store store.Store, engine kmscrypto.Engine) *service {
 	return &service{store: store, engine: engine}
 }
@@ -116,35 +117,72 @@ func (s *service) CreateCryptoKey(ctx context.Context, req *kmspb.CreateCryptoKe
 		return nil, status.Error(codes.InvalidArgument, "crypto_key is required")
 	}
 
-	if req.GetCryptoKey().GetPurpose() != kmspb.CryptoKey_ENCRYPT_DECRYPT {
-		return nil, status.Error(codes.InvalidArgument, "only ENCRYPT_DECRYPT purpose is supported")
-	}
-
+	purpose := req.GetCryptoKey().GetPurpose()
 	cryptoKeyName := fmt.Sprintf("%s/cryptoKeys/%s", keyRing.ResourceName(), req.GetCryptoKeyId())
 	primaryVersionName := names.FormatCryptoKeyVersion(cryptoKeyName, "1")
-	material, err := s.engine.GenerateKeyMaterial(ctx)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to generate key material: %v", err)
-	}
 
-	version := &kmspb.CryptoKeyVersion{
-		Name:            primaryVersionName,
-		State:           kmspb.CryptoKeyVersion_ENABLED,
-		ProtectionLevel: kmspb.ProtectionLevel_SOFTWARE,
-		Algorithm:       kmspb.CryptoKeyVersion_GOOGLE_SYMMETRIC_ENCRYPTION,
-		CreateTime:      timestamppb.Now(),
-	}
+	var (
+		material  kmscrypto.KeyMaterial
+		algorithm kmspb.CryptoKeyVersion_CryptoKeyVersionAlgorithm
+		version   *kmspb.CryptoKeyVersion
+		ck        *kmspb.CryptoKey
+	)
 
-	ck := &kmspb.CryptoKey{
-		Name:       cryptoKeyName,
-		CreateTime: timestamppb.Now(),
-		Labels:     mapsCopy(req.GetCryptoKey().GetLabels()),
-		Purpose:    kmspb.CryptoKey_ENCRYPT_DECRYPT,
-		VersionTemplate: &kmspb.CryptoKeyVersionTemplate{
+	switch purpose {
+	case kmspb.CryptoKey_ENCRYPT_DECRYPT:
+		algorithm = kmspb.CryptoKeyVersion_GOOGLE_SYMMETRIC_ENCRYPTION
+		material, err = s.engine.GenerateKeyMaterial(ctx)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to generate key material: %v", err)
+		}
+		version = &kmspb.CryptoKeyVersion{
+			Name:            primaryVersionName,
+			State:           kmspb.CryptoKeyVersion_ENABLED,
 			ProtectionLevel: kmspb.ProtectionLevel_SOFTWARE,
-			Algorithm:       kmspb.CryptoKeyVersion_GOOGLE_SYMMETRIC_ENCRYPTION,
-		},
-		Primary: version,
+			Algorithm:       algorithm,
+			CreateTime:      timestamppb.Now(),
+		}
+		ck = &kmspb.CryptoKey{
+			Name:       cryptoKeyName,
+			CreateTime: timestamppb.Now(),
+			Labels:     mapsCopy(req.GetCryptoKey().GetLabels()),
+			Purpose:    purpose,
+			VersionTemplate: &kmspb.CryptoKeyVersionTemplate{
+				ProtectionLevel: kmspb.ProtectionLevel_SOFTWARE,
+				Algorithm:       algorithm,
+			},
+			Primary: version,
+		}
+
+	case kmspb.CryptoKey_ASYMMETRIC_SIGN:
+		algorithm = req.GetCryptoKey().GetVersionTemplate().GetAlgorithm()
+		if algorithm != kmspb.CryptoKeyVersion_EC_SIGN_SECP256K1_SHA256 {
+			return nil, status.Errorf(codes.InvalidArgument, "unsupported algorithm for ASYMMETRIC_SIGN: %v", algorithm)
+		}
+		material, err = s.engine.GenerateAsymmetricKeyMaterial(ctx, algorithm.String())
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to generate asymmetric key material: %v", err)
+		}
+		version = &kmspb.CryptoKeyVersion{
+			Name:            primaryVersionName,
+			State:           kmspb.CryptoKeyVersion_ENABLED,
+			ProtectionLevel: kmspb.ProtectionLevel_SOFTWARE,
+			Algorithm:       algorithm,
+			CreateTime:      timestamppb.Now(),
+		}
+		ck = &kmspb.CryptoKey{
+			Name:       cryptoKeyName,
+			CreateTime: timestamppb.Now(),
+			Labels:     mapsCopy(req.GetCryptoKey().GetLabels()),
+			Purpose:    purpose,
+			VersionTemplate: &kmspb.CryptoKeyVersionTemplate{
+				ProtectionLevel: kmspb.ProtectionLevel_SOFTWARE,
+				Algorithm:       algorithm,
+			},
+		}
+
+	default:
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported purpose: %v", purpose)
 	}
 
 	if err := s.store.CreateCryptoKey(ctx, keyRing.ResourceName(), ck, version, material); err != nil {
@@ -185,7 +223,22 @@ func (s *service) CreateCryptoKeyVersion(ctx context.Context, req *kmspb.CreateC
 		return nil, status.Errorf(codes.InvalidArgument, "invalid parent: %v", err)
 	}
 
-	material, err := s.engine.GenerateKeyMaterial(ctx)
+	// Read parent key to determine purpose/algorithm
+	ck, err := s.store.GetCryptoKey(ctx, cryptoKeyName)
+	if err != nil {
+		return nil, err
+	}
+
+	algorithm := ck.GetVersionTemplate().GetAlgorithm()
+	var material kmscrypto.KeyMaterial
+	switch ck.GetPurpose() {
+	case kmspb.CryptoKey_ENCRYPT_DECRYPT:
+		material, err = s.engine.GenerateKeyMaterial(ctx)
+	case kmspb.CryptoKey_ASYMMETRIC_SIGN:
+		material, err = s.engine.GenerateAsymmetricKeyMaterial(ctx, algorithm.String())
+	default:
+		return nil, status.Errorf(codes.Internal, "unexpected purpose: %v", ck.GetPurpose())
+	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to generate key material: %v", err)
 	}
@@ -200,7 +253,7 @@ func (s *service) CreateCryptoKeyVersion(ctx context.Context, req *kmspb.CreateC
 	version := &kmspb.CryptoKeyVersion{
 		Name:            versionName,
 		State:           kmspb.CryptoKeyVersion_ENABLED,
-		Algorithm:       kmspb.CryptoKeyVersion_GOOGLE_SYMMETRIC_ENCRYPTION,
+		Algorithm:       algorithm,
 		ProtectionLevel: kmspb.ProtectionLevel_SOFTWARE,
 		CreateTime:      timestamppb.Now(),
 	}
@@ -347,6 +400,78 @@ func (s *service) Decrypt(ctx context.Context, req *kmspb.DecryptRequest) (*kmsp
 		Plaintext:       plaintext,
 		PlaintextCrc32C: wrapperspb.Int64(int64(checksum)),
 		UsedPrimary:     usedPrimary,
+	}, nil
+}
+
+func (s *service) GetPublicKey(ctx context.Context, req *kmspb.GetPublicKeyRequest) (*kmspb.PublicKey, error) {
+	if _, err := names.ParseCryptoKeyVersion(req.GetName()); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid name: %v", err)
+	}
+
+	version, material, err := s.store.GetCryptoKeyVersion(ctx, req.GetName())
+	if err != nil {
+		return nil, err
+	}
+
+	if version.GetAlgorithm() != kmspb.CryptoKeyVersion_EC_SIGN_SECP256K1_SHA256 {
+		return nil, status.Errorf(codes.FailedPrecondition, "key version algorithm %v does not support GetPublicKey", version.GetAlgorithm())
+	}
+
+	pemBytes, err := s.engine.GetPublicKeyPEM(ctx, material)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get public key: %v", err)
+	}
+
+	checksum := crc.Compute(pemBytes)
+	return &kmspb.PublicKey{
+		Pem:             string(pemBytes),
+		Algorithm:       version.GetAlgorithm(),
+		PemCrc32C:       wrapperspb.Int64(int64(checksum)),
+		Name:            version.GetName(),
+		ProtectionLevel: version.GetProtectionLevel(),
+	}, nil
+}
+
+func (s *service) AsymmetricSign(ctx context.Context, req *kmspb.AsymmetricSignRequest) (*kmspb.AsymmetricSignResponse, error) {
+	if _, err := names.ParseCryptoKeyVersion(req.GetName()); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid name: %v", err)
+	}
+
+	version, material, err := s.store.GetCryptoKeyVersion(ctx, req.GetName())
+	if err != nil {
+		return nil, err
+	}
+
+	if version.GetAlgorithm() != kmspb.CryptoKeyVersion_EC_SIGN_SECP256K1_SHA256 {
+		return nil, status.Errorf(codes.FailedPrecondition, "key version algorithm %v does not support AsymmetricSign", version.GetAlgorithm())
+	}
+
+	digest := req.GetDigest()
+	if digest == nil {
+		return nil, status.Error(codes.InvalidArgument, "digest is required")
+	}
+	sha256Digest := digest.GetSha256()
+	if len(sha256Digest) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "sha256 digest is required for EC_SIGN_SECP256K1_SHA256")
+	}
+
+	verifiedDigest, err := verifyChecksum(sha256Digest, req.GetDigestCrc32C())
+	if err != nil {
+		return nil, err
+	}
+
+	sig, err := s.engine.Sign(ctx, material, sha256Digest)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "sign failed: %v", err)
+	}
+
+	checksum := crc.Compute(sig)
+	return &kmspb.AsymmetricSignResponse{
+		Signature:            sig,
+		SignatureCrc32C:      wrapperspb.Int64(int64(checksum)),
+		VerifiedDigestCrc32C: verifiedDigest,
+		Name:                 version.GetName(),
+		ProtectionLevel:      version.GetProtectionLevel(),
 	}, nil
 }
 

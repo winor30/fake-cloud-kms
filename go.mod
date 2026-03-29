@@ -6,6 +6,7 @@ tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 
 require (
 	cloud.google.com/go/kms v1.25.0
+	github.com/btcsuite/btcd/btcec/v2 v2.3.6
 	github.com/tink-crypto/tink-go/v2 v2.6.0
 	google.golang.org/api v0.269.0
 	google.golang.org/grpc v1.79.1
@@ -70,6 +71,7 @@ require (
 	github.com/daixiang0/gci v0.13.7 // indirect
 	github.com/dave/dst v0.27.3 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.0.1 // indirect
 	github.com/denis-tingaikin/go-header v0.5.0 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/ettle/strcase v0.2.0 // indirect

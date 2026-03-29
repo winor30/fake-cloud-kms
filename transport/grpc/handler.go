@@ -65,3 +65,11 @@ func (h *handler) Encrypt(ctx context.Context, req *kmspb.EncryptRequest) (*kmsp
 func (h *handler) Decrypt(ctx context.Context, req *kmspb.DecryptRequest) (*kmspb.DecryptResponse, error) {
 	return h.svc.Decrypt(ctx, req)
 }
+
+func (h *handler) GetPublicKey(ctx context.Context, req *kmspb.GetPublicKeyRequest) (*kmspb.PublicKey, error) {
+	return h.svc.GetPublicKey(ctx, req)
+}
+
+func (h *handler) AsymmetricSign(ctx context.Context, req *kmspb.AsymmetricSignRequest) (*kmspb.AsymmetricSignResponse, error) {
+	return h.svc.AsymmetricSign(ctx, req)
+}
